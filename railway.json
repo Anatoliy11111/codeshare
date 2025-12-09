@@ -1,0 +1,9 @@
+{
+  "build": {
+    "builder": "nodejs"
+  },
+  "deploy": {
+    "startCommand": "npm run start",
+    "workingDirectory": "server"
+  }
+}
