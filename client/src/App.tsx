@@ -1,74 +1,134 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
-import type { OnMount } from '@monaco-editor/react';
-import io, { Socket } from 'socket.io-client';
+import * as Y from 'yjs';
+import { WebsocketProvider } from 'y-websocket';
+import { MonacoBinding } from 'y-monaco';
 
-const BACKEND_URL = import.meta.env.VITE_SOCKET_URL
-  ? `${import.meta.env.VITE_SOCKET_URL}`
-  : undefined;
-
-const socket: Socket = io(BACKEND_URL, {
-  autoConnect: true,
-});
+const WEBSOCKET_URL = import.meta.env.VITE_WEBSOCKET_URL || 'ws://localhost:3000';
 
 const CodeShareApp: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [code, setCode] = useState<string>('');
-  const [initialized, setInitialized] = useState(false);
-  const editorRef = useRef<any>(null);
+  const [userCount, setUserCount] = useState(0);
 
-  // Получаем roomId из query-параметра
   const roomId = searchParams.get('room');
 
-  // Если roomId нет — создаём новый и обновляем URL
   useEffect(() => {
     if (!roomId) {
       const newRoomId = Math.random().toString(36).substring(2, 10);
       setSearchParams({ room: newRoomId }, { replace: true });
-      return;
     }
+  }, [roomId, setSearchParams]);
 
-    // Подключаемся к комнате
-    socket.emit('joinRoom', roomId);
+  // Yjs-инстансы
+  const ydocRef = useRef<Y.Doc | null>(null);
+  const providerRef = useRef<WebsocketProvider | null>(null);
+  const awarenessRef = useRef<any>(null);
+  const initialTextAddedRef = useRef(false);
 
-    const onRoomState = (initialCode: string) => {
-      setCode(initialCode);
-      setInitialized(true);
+  useEffect(() => {
+    if (!roomId) return;
+
+    if (ydocRef.current) ydocRef.current.destroy();
+    if (providerRef.current) providerRef.current.destroy();
+
+    const ydoc = new Y.Doc();
+    const ytext = ydoc.getText('code');
+    const provider = new WebsocketProvider(WEBSOCKET_URL, roomId, ydoc, {
+      connect: true,
+    });
+
+    const awareness = provider.awareness;
+    const clientId = awareness.clientID;
+    const name = 'User ' + Math.floor(Math.random() * 100);
+    const color = '#' + Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0');
+
+    // Устанавливаем начальное состояние
+    awareness.setLocalState({ name, color });
+
+    const updateUserCount = () => {
+      const states = Array.from(awareness.getStates().values());
+      setUserCount(states.length);
     };
 
-    const onCodeUpdate = (newCode: string) => {
-      if (editorRef.current?.getValue() !== newCode) {
-        setCode(newCode);
+    awareness.on('change', updateUserCount);
+    updateUserCount();
+
+    // Добавляем начальный текст при синхронизации
+    const addInitialTextIfNeeded = () => {
+      if (!initialTextAddedRef.current && ytext.toString() === '') {
+        ytext.insert(0, '// Collaborative coding...\nconsole.log("Hello, everyone!");');
+        initialTextAddedRef.current = true;
       }
     };
 
-    socket.on('roomState', onRoomState);
-    socket.on('codeUpdate', onCodeUpdate);
+    const onSync = (isSynced: boolean) => {
+      if (isSynced) {
+        addInitialTextIfNeeded();
+      }
+    };
+
+    provider.on('sync', onSync);
+
+    // === Отслеживание видимости вкладки ===
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        // Пользователь ушёл с вкладки → ставим offline
+        awareness.setLocalState(null);
+      } else {
+        // Пользователь вернулся → снова online
+        awareness.setLocalState({ name, color });
+      }
+    };
+
+    // === Отправляем сигнал "ушёл" при закрытии вкладки ===
+    const handleBeforeUnload = () => {
+      awareness.setLocalState(null);
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    ydocRef.current = ydoc;
+    providerRef.current = provider;
+    awarenessRef.current = awareness;
 
     return () => {
-      socket.off('roomState', onRoomState);
-      socket.off('codeUpdate', onCodeUpdate);
+      // === Отправляем сигнал "ушёл" при размонтировании (обновление тоже сюда попадает) ===
+      awareness.setLocalState(null);
+
+      ydoc.destroy();
+      provider.destroy();
+      awareness.destroy();
+      provider.off('sync', onSync);
+
+      // Убираем обработчики
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [roomId, setSearchParams]);
+  }, [roomId]);
 
-  const handleEditorChange = (value: string | undefined) => {
-    if (value === undefined || !roomId || !initialized) return;
-    setCode(value);
-    socket.emit('codeChange', { roomId, code: value });
-  };
+  const handleEditorMount = (editor: any) => {
+    const ydoc = ydocRef.current;
+    const awareness = awarenessRef.current;
+    if (!ydoc || !awareness || !roomId) return;
 
-  const handleEditorDidMount: OnMount = (editor) => {
-    editorRef.current = editor;
+    const ytext = ydoc.getText('code');
+    new MonacoBinding(ytext, editor.getModel(), new Set([editor]), awareness);
   };
 
   const handleCopyLink = () => {
-    const url = `${window.location.origin}?room=${roomId}`;
-    navigator.clipboard.writeText(url).then(() => {
-      // Можно добавить уведомление через Ant Design, если используете
-      alert('Ссылка скопирована!');
-    });
+    if (roomId) {
+      const url = `${window.location.origin}?room=${roomId}`;
+      navigator.clipboard.writeText(url).then(() => {
+        alert('🔗 Ссылка скопирована!');
+      });
+    }
   };
+
+  if (!roomId) {
+    return <div>Загрузка...</div>;
+  }
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -77,17 +137,15 @@ const CodeShareApp: React.FC = () => {
           padding: '12px 24px',
           backgroundColor: '#1e1e1e',
           color: '#f0f0f0',
-          textAlign: 'center',
-          fontSize: '1rem',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
         }}
       >
-        <h2 style={{ margin: 0, fontSize: '1.25rem' }}>
-          CodeShare — Room: <code>{roomId || '...'}</code>
+        <h2>
+          CodeShare — Room: <code>{roomId}</code>
         </h2>
-        {roomId && (
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
           <button
             onClick={handleCopyLink}
             style={{
@@ -97,26 +155,24 @@ const CodeShareApp: React.FC = () => {
               borderRadius: '4px',
               padding: '4px 8px',
               cursor: 'pointer',
+              fontSize: '0.9rem',
             }}
           >
             Copy Link
           </button>
-        )}
+          <span>👥 Online: {userCount}</span>
+        </div>
       </header>
       <div style={{ flexGrow: 1 }}>
         <Editor
           height="100%"
-          language="typescript"
-          value={code}
-          onChange={handleEditorChange}
-          onMount={handleEditorDidMount}
+          defaultLanguage="typescript"
+          onMount={handleEditorMount}
           theme="vs-dark"
-          loading="Loading editor..."
           options={{
             minimap: { enabled: false },
             fontSize: 14,
             scrollBeyondLastLine: false,
-            fontFamily: 'Consolas, "Courier New", monospace',
             automaticLayout: true,
           }}
         />
