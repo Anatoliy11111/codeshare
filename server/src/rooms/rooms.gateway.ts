@@ -11,7 +11,7 @@ import { RoomState } from './rooms.types';
 // CORS: разрешаем только доверенные origins
 const FRONTEND_URLS = [
   'http://localhost:3001',
-  'https://codeshare-client.vercel.app', // ← замените на ваш Vercel URL
+  'https://codeshare-murex.vercel.app', // ← замените на ваш Vercel URL
   // Можно добавить другие
 ].filter(Boolean);
 
