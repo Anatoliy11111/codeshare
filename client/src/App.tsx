@@ -9,7 +9,7 @@ import io, { Socket } from 'socket.io-client';
 // - локально: socket.io сам использует тот же хост (благодаря proxy)
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL
   ? `${import.meta.env.VITE_BACKEND_URL}`
-  : undefined; // undefined = текущий origin (для proxy)
+  : 'https://codeshare-cpc0.onrender.com'; // undefined = текущий origin (для proxy)
 
 const socket: Socket = io(BACKEND_URL, {
   // Только в проде можно указать path, но у нас корень → не нужно
