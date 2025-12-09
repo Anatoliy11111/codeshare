@@ -22,7 +22,7 @@ const App: React.FC = () => {
   const [initialized, setInitialized] = useState(false);
   const editorRef = useRef<any>(null);
   const navigate = useNavigate();
-
+console.log(BACKEND_URL)
   // Создаём комнату, если ID не задан
   useEffect(() => {
     if (!roomIdParam) {
