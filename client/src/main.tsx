@@ -3,9 +3,9 @@ import ReactDOM from 'react-dom/client';
 import { createBrowserRouter, RouterProvider } from 'react-router-dom';
 import App from './App';
 
+// Только корневой маршрут — всё управление через query-параметры
 const router = createBrowserRouter([
-  { path: '/', element: <App /> },
-  { path: '/room/:roomId', element: <App /> },
+  { path: '*', element: <App /> }, // ловим всё: /, /any, и т.д.
 ]);
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
